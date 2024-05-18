@@ -20,13 +20,22 @@ void MTLEngine::run() {
   SDL_Event e;
   while (!quit) {
     while (SDL_PollEvent(&e) != 0) {
-      switch (e.type) {
-      case SDL_QUIT:
+      if (e.type == SDL_QUIT) {
         quit = true;
-        break;
+      }
+      if (e.type == SDL_WINDOWEVENT &&
+          e.window.event == SDL_WINDOWEVENT_CLOSE &&
+          e.window.windowID == SDL_GetWindowID(sdlWindow)) {
+        quit = true;
       }
     }
+
     ppool = NS::AutoreleasePool::alloc()->init();
+
+    // Resize drawable if needed
+    int width, height;
+    SDL_GetRendererOutputSize(sdlRenderer, &width, &height);
+    metalLayer->setDrawableSize(CGSizeMake(width, height));
 
     metalDrawable = metalLayer->nextDrawable();
     draw();
@@ -50,8 +59,9 @@ void MTLEngine::initWindow() {
   SDL_SetHint(SDL_HINT_RENDER_DRIVER, "metal");
   SDL_Init(SDL_INIT_VIDEO);
 
-  SDL_Window *window =
-      SDL_CreateWindow("SDL Metal", -1, -1, 800, 600, SDL_WINDOW_ALLOW_HIGHDPI);
+  SDL_Window *window = SDL_CreateWindow(
+      "SDL Metal", SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, 800, 600,
+      SDL_WINDOW_ALLOW_HIGHDPI | SDL_WINDOW_RESIZABLE);
   assert(window != NULL);
   SDL_Renderer *renderer = SDL_CreateRenderer(
       window, -1, SDL_RENDERER_ACCELERATED | SDL_RENDERER_PRESENTVSYNC);
@@ -93,8 +103,6 @@ void MTLEngine::createShaderLibrary() {
     fprintf(stderr, "Failed to load default library.\n");
     std::exit(-1);
   }
-
-  // opts->release();
 }
 
 void MTLEngine::createCommandQueue() {

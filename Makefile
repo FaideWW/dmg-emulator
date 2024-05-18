@@ -21,7 +21,7 @@ SHADER_OBJ = $(addprefix $(OBJ_DIR)/, $(addsuffix .air, $(basename $(notdir $(SH
 $(info SRC is $(SRC))
 $(info OBJ is $(OBJ))
 
-CXXFLAGS = -std=c++17 -Iinclude -Iinclude/metal-cpp -I/opt/homebrew/include
+CXXFLAGS = -std=c++17 -Iinclude -I/usr/local/include/metal-cpp -I/opt/homebrew/include
 CXXFLAGS += -Wall -Wformat
 
 LDFLAGS = -framework Foundation -framework Metal -framework QuartzCore
