@@ -25,7 +25,7 @@ CXXFLAGS = -std=c++17 -Iinclude -Iinclude/metal-cpp -I/opt/homebrew/include
 CXXFLAGS += -Wall -Wformat
 
 LDFLAGS = -framework Foundation -framework Metal -framework QuartzCore
-LDFLAGS += -L/opt/homebrew/lib -Llib -lglfw
+LDFLAGS += -L/opt/homebrew/lib -Llib -lSDL2
 
 $(info LDFLAGS is $(LDFLAGS))
 $(info CLFAGS is $(CFLAGS))

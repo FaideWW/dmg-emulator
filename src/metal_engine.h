@@ -2,11 +2,9 @@
 
 #include "Texture.h"
 #include "VertexData.h"
-#include "glfw_bridge.h"
-#define GLFW_INCLUDE_NONE
-#include <GLFW/glfw3.h>
 #include <Metal/Metal.hpp>
 #include <QuartzCore/QuartzCore.hpp>
+#include <SDL2/SDL.h>
 #include <filesystem>
 #include <stb/stb_image.h>
 
@@ -17,15 +15,11 @@ public:
   void cleanup();
   void resizeFrameBuffer(int width, int height);
 
-  static void frameBufferSizeCallback(GLFWwindow *window, int width,
-                                      int height);
-
 private:
-  void initDevice();
   void initWindow();
 
   void createSquare();
-  void createDefaultLibrary();
+  void createShaderLibrary();
   void createCommandQueue();
   void createRenderPipeline();
 
@@ -33,9 +27,11 @@ private:
   void sendRenderCommand();
   void draw();
 
+  bool quit;
   NS::AutoreleasePool *ppool;
   MTL::Device *metalDevice;
-  GLFWwindow *glfwWindow;
+  SDL_Window *sdlWindow;
+  SDL_Renderer *sdlRenderer;
   CA::MetalLayer *metalLayer;
   CA::MetalDrawable *metalDrawable;
 
