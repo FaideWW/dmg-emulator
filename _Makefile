@@ -23,7 +23,6 @@ CPP_OBJ = $(CPP_SRC:$(SRC_DIR)/%.cpp=$(OBJ_DIR)/%.o)
 OBJC_OBJ = $(OBJC_SRC:$(SRC_DIR)/%.mm=$(OBJ_DIR)/%.o)
 SHADER_OBJ = $(SHADER_SRC:$(SRC_DIR)/%.metal=$(OBJ_DIR)/%.air)
 IMGUI_OBJ = $(IMGUI_SRC:$(IMGUI_DIR)/%.cpp=$(OBJ_DIR)/imgui/%.o)
-IMGUI_OBJ := $(IMGUI_OBJ:$(IMGUI_DIR)/%.mm=$(OBJ_DIR)/imgui/%.o)
 
 # $(info CPP_SRC is $(CPP_SRC))
 # $(info CPP_OBJ is $(CPP_OBJ))
@@ -34,7 +33,7 @@ IMGUI_OBJ := $(IMGUI_OBJ:$(IMGUI_DIR)/%.mm=$(OBJ_DIR)/imgui/%.o)
 $(info IMGUI_SRC is $(IMGUI_SRC))
 $(info IMGUI_OBJ is $(IMGUI_OBJ))
 
-CXXFLAGS = -std=c++17 -Iinclude -I$(IMGUI_DIR) -I$(IMGUI_DIR)/backends -I/usr/local/include/metal-cpp -I/opt/homebrew/include -I/opt/homebrew/include/SDL2
+CXXFLAGS = -std=c++17 -Iinclude -Iinclude/imgui -Iinclude/imgui/backends -I/usr/local/include/metal-cpp -I/opt/homebrew/include -I/opt/homebrew/include/SDL2
 CXXFLAGS += -Wall -Wformat -DNEWMAIN -g -O0
 
 LDFLAGS = -framework Foundation -framework Metal -framework QuartzCore
