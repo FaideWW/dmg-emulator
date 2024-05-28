@@ -12,8 +12,8 @@
 #include <SDL2/SDL.h>
 
 #define RENDER_SCALE 1
-uint32_t SCREEN_WIDTH = 1280;
-uint32_t SCREEN_HEIGHT = 720;
+uint32_t SCREEN_WIDTH = 1920;
+uint32_t SCREEN_HEIGHT = 1080;
 
 static macos_graphics_buffer graphicsBuffer;
 
@@ -95,7 +95,9 @@ void debugDrawGradient(macos_graphics_buffer *buffer, uint8_t t) {
 
     row += buffer->pitch;
   }
+}
 
+void copyBufferToTexture(macos_graphics_buffer *buffer) {
   MTL::Region region = MTL::Region(0, 0, 0, buffer->width, buffer->height, 1);
 
   buffer->texture->replaceRegion(region, 0, buffer->memory, buffer->pitch);
@@ -208,11 +210,11 @@ int main(int argc, char **argv) {
   bridge.emulatorState =
       (emulator_state *)mmap(0, sizeof(emulator_state), PROT_READ | PROT_WRITE,
                              MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
-  bridge.graphicsBuffer = (uint8_t *)graphicsBuffer.memory;
+  bridge.graphicsBuffer = (uint32_t *)graphicsBuffer.memory;
   bridge.platformReadEntireFile = macos_readEntireFile;
   bridge.platformFreeFileMemory = macos_freeFileMemory;
 
-  initEmulator(&bridge, "");
+  initEmulator(&bridge, "assets/Tetris.gb");
   initEmulatorImguiFrame(&bridge, io);
 
   // -----------------------------------------------------------------------------
@@ -274,8 +276,12 @@ int main(int argc, char **argv) {
     drawEmulatorImguiFrame(&bridge, io);
 
     // ------ emulator logic goes here
-    debugDrawGradient(&graphicsBuffer, ++t);
+    if (bridge.emulatorState->isRunning) {
+      stepFrame(&bridge);
+    }
+    /* debugDrawGradient(&graphicsBuffer, ++t); */
     // ------ emulator logic ends here
+    copyBufferToTexture(&graphicsBuffer);
 
     renderCommandEncoder->setRenderPipelineState(metalRenderPSO);
     renderCommandEncoder->setVertexBuffer(graphicsBuffer.screenVertexBuffer, 0,

@@ -4,7 +4,10 @@
 static size_t decodeCartROMSize(uint8_t byteValue);
 static cart_hardware decodeCartType(uint8_t byteValue);
 
+EmulatorLog debugLog;
+
 void initEmulator(emulator_bridge *bridge, std::string cartridgeROMPath) {
+  debugLog.enableLogging();
   emulator_state *state = bridge->emulatorState;
   // load boot ROM
   read_file_result bootRomData =
@@ -20,7 +23,6 @@ void initEmulator(emulator_bridge *bridge, std::string cartridgeROMPath) {
     // load boot ROM
     read_file_result cartRomData =
         bridge->platformReadEntireFile(cartridgeROMPath);
-    assert(cartRomData.contentSize == 0x100);
     // load cartridge ROM
     uint8_t *cartRomPointer = state->cartridgeROM;
     for (size_t byteIndex = 0; byteIndex < cartRomData.contentSize;
@@ -28,10 +30,19 @@ void initEmulator(emulator_bridge *bridge, std::string cartridgeROMPath) {
       *cartRomPointer++ = *((uint8_t *)cartRomData.content + byteIndex);
     }
 
-    uint8_t cartRomSizeValue = *(state->cartridgeROM + CART_ROM_SIZE);
-    state->cartridgeROMSize = decodeCartROMSize(cartRomSizeValue);
+    debugLog.AddLog("loaded %s; size: %dB\n", cartridgeROMPath.c_str(),
+                    cartRomData.contentSize);
 
-    uint8_t cartRamSizeByte = *(state->cartridgeROM + CART_RAM_SIZE);
+    internal_writeMemoryRegion(state, state->cartridgeROM,
+                               cartRomData.contentSize, 0);
+
+    uint8_t cartRomSizeValue;
+    internal_readMemory8(state, MEM_CART_ROM_SIZE, &cartRomSizeValue);
+    state->cartridgeROMSize = decodeCartROMSize(cartRomSizeValue);
+    debugLog.AddLog("cartridge ROM size: %zuB\n", state->cartridgeROMSize);
+
+    uint8_t cartRamSizeByte;
+    internal_readMemory8(state, MEM_CART_RAM_SIZE, &cartRamSizeByte);
     size_t cartRamSize = 0;
     switch (cartRamSizeByte) {
     // 0x00: no RAM
@@ -56,46 +67,90 @@ void initEmulator(emulator_bridge *bridge, std::string cartridgeROMPath) {
 
     state->cartridgeRAMSize = cartRamSize;
     state->isCartLoaded = true;
+    state->isBooting = true;
 
-    uint8_t cartTypeByte = *(state->cartridgeROM + CART_TYPE);
+    uint8_t cartTypeByte;
+    internal_readMemory8(state, MEM_CART_TYPE, &cartTypeByte);
     state->cartridgeHardware = decodeCartType(cartTypeByte);
   }
 
   bridge->isInitialized = true;
 }
 
-void bootEmulator(emulator_bridge *bridge) {
+// TODO: this is probably broken. we don't want to wipe all memory (or if we do,
+// we need to reload stuff like the boot ROM
+void resetEmulator(emulator_bridge *bridge) {
   emulator_state *state = bridge->emulatorState;
-  dmg_cpu cpu = state->cpu;
-  dmg_memory memory = state->memory;
   // zero out the state
-  memset(&cpu, 0, sizeof(dmg_cpu));
-  memset(&memory, 0, sizeof(dmg_memory));
-  state->isBooting = true;
+  memset(&state->cpu, 0, sizeof(dmg_cpu));
+  memset(&state->memory, 0, sizeof(dmg_memory));
   state->cyclesDelta = 0;
 }
 
-// Advance the emulation by 1 CPU instruction
+// Advance the emulation 1 CPU instruction. return the number of cycles elapsed
+int stepInstruction(emulator_bridge *bridge) {
+  emulator_state *state = bridge->emulatorState;
+  // Advance the clock 1 cpu instruction
+  int cyclesToAdvance = stepCPU(state);
+
+  // compare LY and LYC and update STAT if needed
+  updateStat(state);
+
+  // Service any pending interrupts (if IME is enabled)
+  cyclesToAdvance += serviceInterrupts(state);
+
+  // Advance the PPU and refresh the LCD (if appropriate)
+  advancePPU(state, cyclesToAdvance, bridge->graphicsBuffer);
+
+  // Increment timers
+  advanceTimers(state, cyclesToAdvance);
+
+  // We're done booting once the PC reaches $100
+  if (state->isBooting && state->cpu.pc == 0x100) {
+    state->isBooting = false;
+  }
+
+  return cyclesToAdvance;
+}
+
+// Advance the emulation by 1 frame (70224 cycles)
 // The assumption is this is called every 16.67ms, or at 60FPS
 // (TODO: currently this is enforced with VSYNC, find a way to cap on non-vsync
 // displays).
 // All we need to do is simulate the right amount of cycles and
 // return, and the platform layer is responsible for syncing/sleeping for the
 // right amount of time between frames.
-void stepEmulator(emulator_bridge *bridge) {
+void stepFrame(emulator_bridge *bridge) {
+  int cycleDelta = stepEmulator(bridge, CPU_CYCLES_PER_FRAME -
+                                            bridge->emulatorState->cyclesDelta);
+  bridge->emulatorState->cyclesDelta = cycleDelta;
+}
+
+// advance the emulation an arbitrary number of steps. this is useful for
+// debugging ("advance to next frame", etc.).
+// this is will try to advance at LEAST this number of cycles, but may
+// overrun in the case that we end on an instruction that takes more than the
+// remaining cycles to complete. it may also underrun the cycle count if it hits
+// a debug breakpoint. the function will return the actual number of cycles
+// completed, so that if a precise timing is required the delta can be accounted
+// for
+int stepEmulator(emulator_bridge *bridge, int cyclesToSimulate) {
   emulator_state *state = bridge->emulatorState;
-  int cyclesToAdvance = 0;
-  while (state->cyclesDelta < CPU_CYCLES_PER_FRAME) {
-    // Advance the clock 1 cpu instruction
-    cyclesToAdvance = stepCPU(state);
-    // Advance the ppu by the same amount of cycles
-    advancePPU(state, cyclesToAdvance);
-    state->cyclesDelta += cyclesToAdvance;
+  int cyclesAdvanced = 0;
+  while (cyclesAdvanced < cyclesToSimulate && !state->cpu.isStopped &&
+         !state->cpu.isHalted) {
+    cyclesAdvanced += stepInstruction(bridge);
+
+    if (state->debug_breakpointEnabled &&
+        state->debug_breakpoint == state->cpu.pc) {
+      debugLog.AddLog("[DEBUG] pc reached breakpoint at $%04hX, pausing\n",
+                      state->debug_breakpoint);
+      state->isRunning = false;
+      break;
+    }
   }
 
-  drawVramToBuffer(state, bridge->graphicsBuffer);
-
-  state->cyclesDelta -= CPU_CYCLES_PER_FRAME;
+  return cyclesAdvanced - cyclesToSimulate;
 }
 
 static cart_hardware decodeCartType(uint8_t byteValue) {
@@ -223,6 +278,6 @@ static cart_hardware decodeCartType(uint8_t byteValue) {
 }
 
 static size_t decodeCartROMSize(uint8_t byteValue) {
-  assert(byteValue < 0x08);
+  /* assert(byteValue < 0x08); */
   return kilobytes(32) * (1 << byteValue);
 }
