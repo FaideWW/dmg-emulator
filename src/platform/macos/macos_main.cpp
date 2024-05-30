@@ -11,7 +11,7 @@
 #include <QuartzCore/QuartzCore.hpp>
 #include <SDL2/SDL.h>
 
-#define RENDER_SCALE 1
+#define RENDER_SCALE 3
 uint32_t SCREEN_WIDTH = 1920;
 uint32_t SCREEN_HEIGHT = 1080;
 

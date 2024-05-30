@@ -73,10 +73,11 @@ int writeMemory8(emulator_state *state, uint16_t addr, uint8_t value) {
     } else if (addr == MEM_LCDC) {
       uint8_t prev = state->memory.mainMemory[addr];
       state->memory.mainMemory[addr] = value;
-      /* if (!checkBit(prev, 7) && checkBit(value, 7)) { */
-      /*   // make sure we reset the internal PPU state */
-      /*   resetPPUState(state); */
-      /* } */
+
+      if (checkBit(prev, 7) && !checkBit(value, 7)) {
+        // make sure we reset the internal PPU state when the lcd is disabled
+        resetPPUState(state);
+      }
 
       if (checkBit(prev, 7) && !checkBit(value, 7) && ppuMode != 1) {
         // disabling the LCD outside of VBlank can damage the screen on real

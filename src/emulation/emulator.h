@@ -138,7 +138,7 @@ extern EmulatorLog debugLog;
 #define FLAG_Z 7
 #define FLAG_N 6
 #define FLAG_H 5
-#define FLAG_C 5
+#define FLAG_C 4
 
 #define INTERRUPT_JOYPAD 4
 #define INTERRUPT_SERIAL 3
@@ -146,8 +146,8 @@ extern EmulatorLog debugLog;
 #define INTERRUPT_LCD 1
 #define INTERRUPT_VBLANK 0
 
-inline void setBit(uint8_t *f, int bitIndex) { *f = *f | (1 << bitIndex); }
-inline void clearBit(uint8_t *f, int bitIndex) { *f = *f & ~(1 << bitIndex); }
+inline void setBit(uint8_t *f, int bitIndex) { *f = (*f | (1 << bitIndex)); }
+inline void clearBit(uint8_t *f, int bitIndex) { *f = (*f & ~(1 << bitIndex)); }
 inline void toggleBit(uint8_t *f, int bitIndex) {
   *f = *f ^ ((uint8_t)1 << bitIndex);
 }

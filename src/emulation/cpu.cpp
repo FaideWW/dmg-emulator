@@ -699,7 +699,7 @@ int stepCPU(emulator_state *state) {
     // Rotates left register `a` by 1 bit through the carry flag, setting the
     // carry flag to the bit that falls out (bit 7) and updating bit 0 to the
     // previous value of the carry flag
-    uint8_t value = rlc8(cpu->reg.a, &cpu->reg.f);
+    uint8_t value = rl8(cpu->reg.a, &cpu->reg.f);
     ldR8(&cpu->reg.a, value);
     debugLog.AddLog("RLA;");
     break;

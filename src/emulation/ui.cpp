@@ -116,7 +116,6 @@ void drawCPUWindow(dmg_cpu cpu, bool *open) {
   bool nFlag = checkBit(cpu.reg.f, FLAG_N);
   bool hFlag = checkBit(cpu.reg.f, FLAG_H);
   bool cFlag = checkBit(cpu.reg.f, FLAG_C);
-  ImGui::BeginDisabled();
   ImGui::Checkbox("Z", &zFlag);
   ImGui::SameLine();
   ImGui::Checkbox("N", &nFlag);
@@ -124,7 +123,6 @@ void drawCPUWindow(dmg_cpu cpu, bool *open) {
   ImGui::Checkbox("H", &hFlag);
   ImGui::SameLine();
   ImGui::Checkbox("C", &cFlag);
-  ImGui::EndDisabled();
 
   // special registers (pc, sp, ime)
   ImGui::SeparatorText("Special Registers");

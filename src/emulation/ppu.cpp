@@ -64,6 +64,9 @@ int doBGPixelFetch(emulator_state *state, fifo_pixel *fifo) {
   bool windowEnable = checkBit(lcdc, 5);
   bool windowTileSelect = checkBit(lcdc, 6);
 
+  debugLog.AddLog("[PPU] doing bg pixel fetch at tile %d, ly=%d, dot=%d\n",
+                  ppu->internalXCounter, ly, ppu->currentDot);
+
   int cycles = 0;
 
   // if BG and window display are turned off, push all white pixels to the
@@ -101,18 +104,29 @@ int doBGPixelFetch(emulator_state *state, fifo_pixel *fifo) {
     // bg tile map 0 is at $9800, bg tile map 1 is at $9C00;
     baseAddr = (bgTileSelect ? 0x9C00 : 0x9800);
 
-    // (ly + scy) is ANDed with 0xFF to make sure we don't try to grab tiles
-    // that are outside of the background tilemap (max 256 height)
-    uint16_t tileY = 32 * (((ly + scy) & 0xFF) / 8);
-    // (scx / 8) is ANDed with 0x1F so that we wrap every 32 tiles (lower 5
-    // bits)
-    uint16_t wrappedTileX = ((tileX + (scx / 8)) & 0x1F);
-    tileOffset = tileY + wrappedTileX;
+    // in the full bg map (32 tiles in height), pixelY can be a value between
+    // 0-255 (represnting the current "scanline" in the bg tile map)
+    uint8_t pixelY = ((ly + scy) & 0xFF);
+    // (pixelY / 8 lines per tile) * 32 tiles per row
+    uint16_t yOffset = 32 * (pixelY / 8);
+
+    // (scx / 8) ensures we land on a tile boundary (the fetcher always fetches
+    // 8 pixels, or one tile's width). then the whole thing is ANDed with 0x1F
+    // to ensure we only capture the lower 5 bits (0-31), and will wrap back
+    // around to 0 if needed
+    uint16_t xOffset = ((tileX + (scx / 8)) & 0x1F);
+    tileOffset = yOffset + xOffset;
+    /* debugLog.AddLog( */
+    /*     "[PPU] fetching tile (baseaddr:%04hX, tileX:%d, pixelY:%d, ",
+     * baseAddr, */
+    /*     tileX, pixelY); */
   }
   // clamp tile offset so we don't exceed VRAM
   uint16_t tileAddr = baseAddr + (tileOffset & 0x03FF);
 
   internal_readMemory8(state, tileAddr, &tileNum);
+  /* debugLog.AddLog("tileAddr:%04hX, tileNum:%02X)", tileAddr, tileNum); */
+
   cycles += 2;
 
   // step 2: fetch tile data (low)
@@ -129,8 +143,9 @@ int doBGPixelFetch(emulator_state *state, fifo_pixel *fifo) {
 
   // the tile numbers are unsigned in 8000 addressing mode, and signed in 8800
   // addressing mode
-  uint16_t loAddr =
-      vramBaseAddr + (tileDataSelect ? tileNum : (int8_t)tileNum) + byteOffset;
+  uint16_t loAddr = vramBaseAddr +
+                    ((tileDataSelect ? tileNum : (int8_t)tileNum) * 16) +
+                    byteOffset;
 
   uint8_t loByte;
   internal_readMemory8(state, loAddr, &loByte);
@@ -144,25 +159,36 @@ int doBGPixelFetch(emulator_state *state, fifo_pixel *fifo) {
   internal_readMemory8(state, loAddr + 1, &hiByte);
   cycles += 2;
 
+  /* debugLog.AddLog(" vram addr:%04hX (tile bytes: %02X %02X) ", loAddr,
+   * loByte, */
+  /*                 hiByte); */
+
   // step 4: push pixels
   //
   // decode the tile bytes into pixel data, encode the relevant data, and push
   // to the fifo
+  /* debugLog.AddLog(" pixels: "); */
   for (int i = 0; i < 8; i++) {
-    // folloinwg the 2BPP format, we combine the ith bit of the high byte with
+    // following the 2BPP format, we combine the ith bit of the high byte with
     // the ith bit of the low byte to get the 2-bit color value for the pixel
     uint8_t pixel = 0;
-    pixel |= (loByte & (1 << i));
-    pixel |= (hiByte & (1 << i)) << 1;
+    pixel |= (loByte >> i) & 0x1;
+    pixel |= ((hiByte >> i) & 0x1) << 1;
 
     // the following are disabled for background/window pixels:
     // palette (objs only on DMG)
     // sprite priority (CGB only)
     // background priority (objs only)
 
-    fifo[i].pixelSrc = BG_PIXEL;
-    fifo[i].pixelColor = pixel;
+    // we then fill the buffer in reverse, since bitwise operations go from
+    // right to left, but array indexing goes from left to right
+    fifo[7 - i].pixelSrc = BG_PIXEL;
+    fifo[7 - i].pixelColor = pixel;
+
+    /* debugLog.AddLog("%02X ", pixel); */
   }
+
+  /* debugLog.AddLog("\n"); */
 
   // a full fetch takes 6 cycles
   return cycles;
@@ -269,7 +295,13 @@ void transferPixel(emulator_state *state, uint32_t *graphicsBuffer, uint8_t x,
   uint8_t palette;
   internal_readMemory8(state, paletteAddr, &palette);
 
-  uint8_t color = (palette << (pixel.pixelColor * 2)) & 0x3;
+  uint8_t color = (palette >> (pixel.pixelColor * 2)) & 0x3;
+
+  /* if (pixel.pixelColor != 0) { */
+  /*   debugLog.AddLog( */
+  /*       "[PPU] pixel color: %02X, palette: %02X, palette color: %02X\n", */
+  /*       pixel.pixelColor, palette, color); */
+  /* } */
 
   uint8_t bufferColor = 0;
   switch (color) {
@@ -278,14 +310,19 @@ void transferPixel(emulator_state *state, uint32_t *graphicsBuffer, uint8_t x,
     break;
   }
   case 0b01: {
+    /* debugLog.AddLog("[PPU] x: %d, y: %d - lightgrey (%02X)\n", x, y, color);
+     */
     bufferColor = COLORDATA_LIGHTGREY;
     break;
   }
   case 0b10: {
+    /* debugLog.AddLog("[PPU] x: %d, y: %d - darkgrey (%02X)\n", x, y, color);
+     */
     bufferColor = COLORDATA_DARKGREY;
     break;
   }
   case 0b11: {
+    /* debugLog.AddLog("[PPU] x: %d, y: %d - black (%02X)\n", x, y, color); */
     bufferColor = COLORDATA_BLACK;
     break;
   }
@@ -295,12 +332,13 @@ void transferPixel(emulator_state *state, uint32_t *graphicsBuffer, uint8_t x,
    */
   /*                 bufferColor, x, y); */
 
-  uint32_t *bufferPixel = graphicsBuffer + (y * EMULATOR_SCREEN_WIDTH + x);
+  uint32_t *bufferPixel = graphicsBuffer + (y * EMULATOR_SCREEN_WIDTH) + x;
+
   // write the rgb value to the graphics buffer
   uint8_t a = 0xFF;
 
   *bufferPixel =
-      (bufferColor << 24) | (bufferColor << 16) | (bufferColor << 8) | a;
+      a << 24 | (bufferColor << 16) | (bufferColor << 8) | (bufferColor << 0);
 }
 
 // clocks the PPU by the designated number of cycles. this may advance the PPU
@@ -319,7 +357,9 @@ void advancePPU(emulator_state *state, int cyclesToAdvance,
   // read LCDC
   uint8_t lcdc;
   internal_readMemory8(state, MEM_LCDC, &lcdc);
+
   bool windowEnable = checkBit(lcdc, 5);
+  bool lcdEnabled = checkBit(lcdc, 7);
 
   // read LY
   uint8_t ly;
@@ -330,193 +370,199 @@ void advancePPU(emulator_state *state, int cyclesToAdvance,
   // before proceeding
   cycles += ppu->cycleOverrun;
 
-  while (cycles < cyclesToAdvance) {
-    int cyclesThisStep = 0;
-    /* debugLog.AddLog("[PPU] advancing 1 cycle (mode: %d, ly: %d, dot: %d, " */
-    /*                 "next pixel: %d, pixels in fifo: %d, fetch pending:
-     * %d)\n", */
-    /*                 readPPUMode(state), ly, ppu->currentDot,
-     * ppu->nextLCDPixel, */
-    /*                 ppu->pixelsInFifo, ppu->fetchPendingCyclesRemaining); */
-    // check which PPU mode we're in
-    switch (readPPUMode(state)) {
-    case 0: {
-      // mode 0: HBlank (do nothing, wait until next scanline)
-      if (ppu->currentDot == LINE_DOTS) {
-        // move to the next scanline
-        ppu->currentDot = 0;
-        ly += 1;
-        internal_writeMemory8(state, MEM_LY, ly);
-        if (ly == VBLANK_LINE_START) {
-          // if we've finished scanning the lcd, enter VBlank
-          /* debugLog.AddLog("[PPU] Entering mode 1 VBLANK (ly=%d)\n", ly); */
-          setPPUMode(state, 1);
-        } else {
-          // otherwise, enter mode 2
-          setPPUMode(state, 2);
-          doOAMScan(state);
-        }
-        debugLog.AddLog("[PPU] line %d - %d dots\n", ly - 1, dotsPerLine);
-        dotsPerMode = 0;
-        dotsPerLine = 0;
-      }
-      cyclesThisStep++;
-      break;
-    }
-    case 1: {
-      // mode 1: VBlank (do nothing, wait until next frame)
-      if (ppu->currentDot == LINE_DOTS) {
-        // move to the next scanline and move to mode 2
-        ppu->currentDot = 0;
-        debugLog.AddLog("[PPU] line %d - %d dots\n", ly, dotsPerLine);
-        ly += 1;
-        if (ly == MAX_LINES) {
-          // if we've reached the last scanline, jump to the top and go to
-          // mode 2
-          ly = 0;
-          setPPUMode(state, 2);
-          debugLog.AddLog("[PPU] frame took %d dots (%d per scanline)\n",
-                          dotsPerFrame, (dotsPerFrame / MAX_LINES));
+  if (lcdEnabled) {
+    while (cycles < cyclesToAdvance) {
+      int cyclesThisStep = 0;
+      /* debugLog.AddLog("[PPU] advancing 1 cycle (mode: %d, ly: %d, dot: %d, "
+       */
+      /*                 "next pixel: %d, pixels in fifo: %d, fetch pending:
+       * %d)\n", */
+      /*                 readPPUMode(state), ly, ppu->currentDot,
+       * ppu->nextLCDPixel, */
+      /*                 ppu->pixelsInFifo, ppu->fetchPendingCyclesRemaining);
+       */
+      // check which PPU mode we're in
+      switch (readPPUMode(state)) {
+      case 0: {
+        // mode 0: HBlank (do nothing, wait until next scanline)
+        if (ppu->currentDot == LINE_DOTS) {
+          // move to the next scanline
+          ppu->currentDot = 0;
+          ly += 1;
+          internal_writeMemory8(state, MEM_LY, ly);
+          if (ly == VBLANK_LINE_START) {
+            // if we've finished scanning the lcd, enter VBlank
+            /* debugLog.AddLog("[PPU] Entering mode 1 VBLANK (ly=%d)\n", ly); */
+            setPPUMode(state, 1);
+          } else {
+            // otherwise, enter mode 2
+            setPPUMode(state, 2);
+            doOAMScan(state);
+          }
+          /* debugLog.AddLog("[PPU] line %d - %d dots\n", ly - 1, dotsPerLine);
+           */
           dotsPerMode = 0;
-          dotsPerFrame = 0;
-          /* debugLog.AddLog("[PPU] Entering mode 2 OAMSCAN (ly=%d)\n", ly); */
-          doOAMScan(state);
+          dotsPerLine = 0;
         }
-        dotsPerLine = 0;
-        internal_writeMemory8(state, MEM_LY, ly);
-      }
-      cyclesThisStep++;
-      break;
-    }
-    case 2: {
-      // if we enter this mode with no OAM buffer, do the OAM scan here.
-      if (!ppu->oamScanned) {
-        doOAMScan(state);
-        ppu->oamScanned = true;
-      }
-      // mode 2: OAM scan (queue up objects to be rendered on this scanline)
-      if (ppu->currentDot == MODE2_DOTS) {
-        setPPUMode(state, 3);
-        ppu->oamScanned = false;
-        dotsPerMode = 0;
-        /* debugLog.AddLog("[PPU] Entering mode 3 LCDTRANSFER (ly=%d)\n", ly);
-         */
-        ppu->fetchPendingCyclesRemaining =
-            doBGPixelFetch(state, ppu->fetcherBuffer);
-        // the first fetch does not increment the internal X counter
-        ppu->bufferFull = true;
-      } else {
         cyclesThisStep++;
+        break;
       }
-      break;
-    }
-    case 3: {
-      // mode 3: lcd pixel transfer (run the pixel FIFO/fetcher to push pixels
-      // to the display)
-      uint8_t wx;
-      internal_readMemory8(state, MEM_WX, &wx);
-
-      // check if we've reached the window, and initiate a window fetch
-      if (ppu->nextLCDPixel == wx && windowEnable) {
-        /* debugLog.AddLog( */
-        /*     "[PPU] Reached window at %d; initiating window fetch\n", wx);
-         */
-        // flush the FIFO
-        ppu->pixelsInFifo = 0;
-
-        // start a window fetch
-        ppu->isFetchingWindow = true;
-        ppu->fetchPendingCyclesRemaining =
-            doBGPixelFetch(state, ppu->fetcherBuffer);
-        ppu->bufferFull = true;
-      }
-
-      // check if we need to render a sprite
-      if (ppu->oamSpriteHead < 10 && ppu->spritesInBuffer > 0) {
-        oam_sprite nextSprite = ppu->oamSpriteBuffer[ppu->oamSpriteHead];
-        bool objPriority = checkBit(nextSprite.flags, 7);
-        if (ppu->nextLCDPixel >= nextSprite.x) {
-          /* debugLog.AddLog( */
-          /*     "[PPU] Reached sprite at %d; initiating sprite fetch\n", */
-          /*     ppu->nextLCDPixel); */
-          // if we're at or after the sprite to be rendered, trigger a sprite
-          // fetch
-          // assumption: since we fetch in batches of 8 and sprites are
-          // always 8 pixels wide, this check will guarantee we don't miss any
-          // sprites
-          ppu->fetchPendingCyclesRemaining =
-              doSpritePixelFetch(state, ppu->fetcherBuffer, nextSprite);
-          ppu->oamSpriteHead++;
-
-          // do pixel mixing to merge the fetcher buffer with the FIFO
-          mixPixels(ppu->fifo, ppu->fetcherBuffer, 8, objPriority);
-          // and flush the fetcher buffer
-          ppu->bufferFull = false;
+      case 1: {
+        // mode 1: VBlank (do nothing, wait until next frame)
+        if (ppu->currentDot == LINE_DOTS) {
+          // move to the next scanline and move to mode 2
+          ppu->currentDot = 0;
+          /* debugLog.AddLog("[PPU] line %d - %d dots\n", ly, dotsPerLine); */
+          ly += 1;
+          if (ly == MAX_LINES) {
+            // if we've reached the last scanline, jump to the top and go to
+            // mode 2
+            ly = 0;
+            internal_writeMemory8(state, MEM_LY, ly);
+            setPPUMode(state, 2);
+            debugLog.AddLog("[PPU] frame took %d dots (%d per scanline)\n",
+                            dotsPerFrame, (dotsPerFrame / MAX_LINES));
+            dotsPerMode = 0;
+            dotsPerFrame = 0;
+            /* debugLog.AddLog("[PPU] Entering mode 2 OAMSCAN (ly=%d)\n", ly);
+             */
+            doOAMScan(state);
+          }
+          dotsPerLine = 0;
+          internal_writeMemory8(state, MEM_LY, ly);
         }
+        cyclesThisStep++;
+        break;
       }
-
-      if (ppu->fetchPendingCyclesRemaining > 0) {
-        // do nothing, wait for the fetcher to tick down
-        ppu->fetchPendingCyclesRemaining--;
-      } else {
-        if (ppu->pixelsInFifo > 8) {
-          // the FIFO is full, we sleep the fetcher until there's room
-          /* debugLog.AddLog("[PPU] Fetcher finished; Pausing for FIFO\n"); */
+      case 2: {
+        // if we enter this mode with no OAM buffer, do the OAM scan here.
+        if (!ppu->oamScanned) {
+          doOAMScan(state);
+          ppu->oamScanned = true;
+        }
+        // mode 2: OAM scan (queue up objects to be rendered on this scanline)
+        if (ppu->currentDot == MODE2_DOTS) {
+          setPPUMode(state, 3);
+          ppu->oamScanned = false;
+          dotsPerMode = 0;
+          /* debugLog.AddLog("[PPU] Entering mode 3 LCDTRANSFER (ly=%d)\n", ly);
+           */
+          ppu->fetchPendingCyclesRemaining =
+              doBGPixelFetch(state, ppu->fetcherBuffer);
+          // the first fetch does not increment the internal X counter
+          ppu->bufferFull = true;
         } else {
-          // if we have pending fetched pixels, push them into the fifo
-          if (ppu->bufferFull) {
-            /* debugLog.AddLog("[PPU] Pushing pixels to FIFO\n"); */
-            // push the buffer into the FIFO, empty the buffer, and start a
-            // new fetch
-            for (int i = 0; i < 8; i++) {
-              ppu->fifo[ppu->pixelsInFifo++] = ppu->fetcherBuffer[i];
-            }
+          cyclesThisStep++;
+        }
+        break;
+      }
+      case 3: {
+        // mode 3: lcd pixel transfer (run the pixel FIFO/fetcher to push pixels
+        // to the display)
+        uint8_t wx;
+        internal_readMemory8(state, MEM_WX, &wx);
+
+        // check if we've reached the window, and initiate a window fetch
+        if (ppu->nextLCDPixel == wx && windowEnable) {
+          /* debugLog.AddLog( */
+          /*     "[PPU] Reached window at %d; initiating window fetch\n", wx);
+           */
+          // flush the FIFO
+          ppu->pixelsInFifo = 0;
+
+          // start a window fetch
+          ppu->isFetchingWindow = true;
+          ppu->fetchPendingCyclesRemaining =
+              doBGPixelFetch(state, ppu->fetcherBuffer);
+          ppu->bufferFull = true;
+        }
+
+        // check if we need to render a sprite
+        if (ppu->oamSpriteHead < 10 && ppu->spritesInBuffer > 0) {
+          oam_sprite nextSprite = ppu->oamSpriteBuffer[ppu->oamSpriteHead];
+          bool objPriority = checkBit(nextSprite.flags, 7);
+          if (ppu->nextLCDPixel >= nextSprite.x) {
+            /* debugLog.AddLog( */
+            /*     "[PPU] Reached sprite at %d; initiating sprite fetch\n", */
+            /*     ppu->nextLCDPixel); */
+            // if we're at or after the sprite to be rendered, trigger a sprite
+            // fetch
+            // assumption: since we fetch in batches of 8 and sprites are
+            // always 8 pixels wide, this check will guarantee we don't miss any
+            // sprites
+            ppu->fetchPendingCyclesRemaining =
+                doSpritePixelFetch(state, ppu->fetcherBuffer, nextSprite);
+            ppu->oamSpriteHead++;
+
+            // do pixel mixing to merge the fetcher buffer with the FIFO
+            mixPixels(ppu->fifo, ppu->fetcherBuffer, 8, objPriority);
+            // and flush the fetcher buffer
             ppu->bufferFull = false;
           }
-          if (!ppu->bufferFull) {
-            ppu->fetchPendingCyclesRemaining =
-                doBGPixelFetch(state, ppu->fetcherBuffer);
+        }
 
-            ppu->internalXCounter += 1;
-            ppu->bufferFull = true;
+        if (ppu->fetchPendingCyclesRemaining > 0) {
+          // do nothing, wait for the fetcher to tick down
+          ppu->fetchPendingCyclesRemaining--;
+        } else {
+          if (ppu->pixelsInFifo > 8) {
+            // the FIFO is full, we sleep the fetcher until there's room
+            /* debugLog.AddLog("[PPU] Fetcher finished; Pausing for FIFO\n"); */
+          } else {
+            // if we have pending fetched pixels, push them into the fifo
+            if (ppu->bufferFull) {
+              /* debugLog.AddLog("[PPU] Pushing pixels to FIFO\n"); */
+              // push the buffer into the FIFO, empty the buffer, increment the
+              // fetcher's internal x counter, and start a new fetch
+              for (int i = 0; i < 8; i++) {
+                ppu->fifo[ppu->pixelsInFifo++] = ppu->fetcherBuffer[i];
+              }
+              ppu->bufferFull = false;
+              ppu->internalXCounter += 1;
+            }
+            if (!ppu->bufferFull) {
+              ppu->fetchPendingCyclesRemaining =
+                  doBGPixelFetch(state, ppu->fetcherBuffer);
+
+              ppu->bufferFull = true;
+            }
           }
         }
-      }
 
-      if (ppu->pixelsInFifo > 8) {
-        // if the pixel fifo has at least 8 pixels, shift one onto the screen
-        if (checkBit(lcdc, 7)) {
-          // first check if the LCD is enabled
+        if (ppu->pixelsInFifo > 8) {
+          uint8_t scy;
+          internal_readMemory8(state, MEM_SCY, &scy);
+          // if the pixel fifo has at least 8 pixels, shift one onto the screen
           transferPixel(state, graphicsBuffer, ppu->nextLCDPixel, ly,
                         ppu->fifo[0]);
-        }
-        for (int i = 1; i < ppu->pixelsInFifo; i++) {
-          ppu->fifo[i - 1] = ppu->fifo[i];
-        }
-        ppu->pixelsInFifo--;
-        ppu->nextLCDPixel += 1;
+          for (int i = 1; i < ppu->pixelsInFifo; i++) {
+            ppu->fifo[i - 1] = ppu->fifo[i];
+          }
+          ppu->pixelsInFifo--;
+          ppu->nextLCDPixel += 1;
 
-        if (ppu->nextLCDPixel == EMULATOR_SCREEN_WIDTH) {
-          ppu->nextLCDPixel = 0;
-          // once we've reached the end of the scanline, enter hblank
-          setPPUMode(state, 0);
-          dotsPerMode = 0;
-          /* debugLog.AddLog("[PPU] Entering mode 0 HBLANK (ly=%d)\n", ly); */
+          if (ppu->nextLCDPixel == EMULATOR_SCREEN_WIDTH) {
+            ppu->nextLCDPixel = 0;
+            ppu->internalXCounter = 0;
+            // once we've reached the end of the scanline, enter hblank
+            setPPUMode(state, 0);
+            dotsPerMode = 0;
+            /* debugLog.AddLog("[PPU] Entering mode 0 HBLANK (ly=%d)\n", ly); */
+          }
         }
+
+        cyclesThisStep++;
+        break;
       }
-
-      cyclesThisStep++;
-      break;
+      }
+      ppu->currentDot += cyclesThisStep;
+      dotsPerMode += cyclesThisStep;
+      dotsPerLine += cyclesThisStep;
+      dotsPerFrame += cyclesThisStep;
+      cycles += cyclesThisStep;
     }
-    }
-    ppu->currentDot += cyclesThisStep;
-    dotsPerMode += cyclesThisStep;
-    dotsPerLine += cyclesThisStep;
-    dotsPerFrame += cyclesThisStep;
-    cycles += cyclesThisStep;
+    ppu->cycleOverrun = cycles - cyclesToAdvance;
   }
-
-  ppu->cycleOverrun = cycles - cyclesToAdvance;
 }
 
 void resetPPUState(emulator_state *state) {
@@ -530,7 +576,7 @@ void resetPPUState(emulator_state *state) {
   ppu->pixelsInFifo = 0;
   ppu->spritesInBuffer = 0;
   ppu->bufferFull = false;
-  setPPUMode(state, 2);
+  setPPUMode(state, 0);
 }
 
 uint8_t readPPUMode(emulator_state *state) {

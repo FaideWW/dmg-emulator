@@ -45,6 +45,7 @@ struct EmulatorLog {
     // Options menu
     if (ImGui::BeginPopup("Options")) {
       ImGui::Checkbox("Auto-scroll", &AutoScroll);
+      ImGui::Checkbox("Logging enabled", &enabled);
       ImGui::EndPopup();
     }
 
