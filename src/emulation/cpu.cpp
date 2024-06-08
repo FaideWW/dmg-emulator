@@ -1959,7 +1959,7 @@ void updateStat(emulator_state *state) {
   internal_readMemory8(state, MEM_LYC, &lyc);
   if (ly == lyc) {
     internal_readMemory8(state, MEM_STAT, &stat);
-    setBit(&stat, 2);
+    setBit(&stat, STAT_LY_LYC);
     internal_writeMemory8(state, MEM_STAT, stat);
   }
 }

@@ -214,7 +214,7 @@ int main(int argc, char **argv) {
   bridge.platformReadEntireFile = macos_readEntireFile;
   bridge.platformFreeFileMemory = macos_freeFileMemory;
 
-  initEmulator(&bridge, "assets/Tetris.gb");
+  initEmulator(&bridge, "assets/cpu_instrs/individual/01-special.gb");
   initEmulatorImguiFrame(&bridge, io);
 
   // -----------------------------------------------------------------------------

@@ -102,6 +102,13 @@ extern EmulatorLog debugLog;
 // lcd/graphics
 #define MEM_LCDC 0xFF40
 #define MEM_STAT 0xFF41
+
+#define STAT_SELECT_LYC 6
+#define STAT_SELECT_MODE2 5
+#define STAT_SELECT_MODE1 4
+#define STAT_SELECT_MODE0 3
+#define STAT_LY_LYC 2
+
 #define MEM_SCY 0xFF42
 #define MEM_SCX 0xFF43
 #define MEM_LY 0xFF44
@@ -216,6 +223,7 @@ struct fifo_pixel {
   uint8_t pixelColor;
   bool palette;
   bool pixelSrc;
+  bool bgPriority;
 };
 
 struct oam_sprite {
@@ -254,15 +262,13 @@ struct dmg_ppu {
   uint8_t spritesInBuffer;
   bool oamScanned;
 
-  // the FIFO holds up to 16 pixels to be pushed to the screen (in
-  // first-in-first-out order). if the fifo contains less than 8 pixels, the
-  // fifo is paused and a background pixel fetch is initiated to add 8 more
-  // pixels to the queue (the goal being that there should always be at least 8
-  // pixels in the FIFO in case there's a sprite fetch)
-  // https://www.youtube.com/watch?v=HyzD8pNlpwI&t=2957s
-  fifo_pixel fifo[16];
-  uint8_t pixelsInFifo;
-  bool fifoPaused;
+  // the background FIFO holds up to 8 pixels to be pushed to the screen (in
+  // first-in-first-out order). this FIFO will try to push pixels to the LCD as
+  // long as it has pixels, and will mix pixels from the sprite FIFO (if there
+  // are any) before pushing. if there are no pixels in the bg FIFO it will
+  // pause until it's filled by the next fetch.
+  fifo_pixel bgFifo[8];
+  uint8_t pixelsInBgFifo;
 
   // which pixel on the current scanline will the FIFO push to next
   uint8_t nextLCDPixel;
@@ -271,22 +277,27 @@ struct dmg_ppu {
   // fetch, and an OAM/sprite fetch
   //
   // the background fetcher is technically always running to retrieve the next
-  // group of pixels, but it can only put them into the FIFO when there is room.
-  // so we buffer the pixels the fetcher has retrieved, and then "pause" until
-  // we can push them into the FIFO
+  // group of pixels, but it can only push them into the FIFO when there is
+  // room. so we buffer the pixels the fetcher has retrieved, and then "pause"
+  // until we can push them into the FIFO
   //
   // when we reach a window pixel (the FIFO X == WX, we reset the fetcher, flush
   // the FIFO and initiate a window pixel fetch. (I believe this persists until
   // the end of the scanline, since the window is always the same size as the
   // viewport and can never start BEFORE X=0)
   //
-  // when we reach a sprite (there is an object in the oam buffer whose X ==
-  // FIFO X), initiate a sprite pixel fetch WITHOUT flushing the FIFO. the
-  // pixels emitted by this fetch are "mixed" into the FIFO following some
-  // priority rules (explained in the mixing code)
-  fifo_pixel fetcherBuffer[8];
+  // both bg and window fetches push pixels into the bg FIFO.
+  fifo_pixel bgFetcherBuffer[8];
   bool bufferFull;
-  uint8_t fetchPendingCyclesRemaining;
+  uint8_t bgFetchPendingCyclesRemaining;
+
+  // when we reach a sprite/object (there is an object in the oam buffer whose X
+  // == FIFO X), initiate a sprite pixel fetch and push into the OAM FIFO.
+  // during a sprite fetch the BG FIFO is also paused, so that we don't advance
+  // beyond where the sprite should be displayed.
+  fifo_pixel oamFifo[8];
+  uint8_t pixelsInOamFifo;
+  uint8_t oamFetchPendingCyclesRemaining;
 
   // this value tracks the x-position of the FIFO/fetcher. it's incremented
   // after each pixel fetch (8 pixels at a time), which corresponds to the next
@@ -297,6 +308,12 @@ struct dmg_ppu {
   // whenever the window is being fetched
   bool isFetchingWindow;
   uint8_t windowLineCounter;
+
+  // *Only* a 0 to 1 transition of the STAT interrupt conditions triggers an
+  // IRQ. All conditions are OR'd together, so if multiple conditions are
+  // met/have overlap, only the first condition to be met will trigger an
+  // interrupt.
+  bool lastStatResult;
 };
 
 struct emulator_state {
